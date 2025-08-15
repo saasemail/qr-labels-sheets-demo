@@ -1,0 +1,67 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>QR Labels & Sheets — Demo</title><link rel="icon" href="data:,">
+<style>
+:root{--bg:#0b1020;--panel:#0f1730;--card:#131c39;--line:#223061;--text:#e8ecff;--muted:#a9b6e9;--accent:#8ab4ff}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#0b1020,#0d1834);color:var(--text);font:14px/1.5 system-ui,Segoe UI,Roboto,Arial}
+header{position:sticky;top:0;z-index:5;background:#0b1020cc;backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.wrap{max-width:1100px;margin:0 auto;padding:14px 16px;display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center}
+.title{font-weight:700}
+input[type="text"]{flex:1;min-width:220px;background:var(--panel);border:1px solid var(--line);color:var(--text);padding:10px 12px;border-radius:10px}
+.btn{background:#2a3f7a;border:1px solid var(--line);color:var(--text);padding:10px 12px;border-radius:10px;cursor:pointer;text-decoration:none}
+main{max-width:1100px;margin:0 auto;padding:18px 16px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.chip{padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:#101b3b;cursor:pointer}
+.chip[data-active="true"]{background:var(--accent);color:#0a0f22;border-color:transparent}
+.count{margin-left:auto;opacity:.85}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 8px 30px #0006}
+.img{aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;background:#0b1430;border-bottom:1px solid var(--line)}
+.img img{max-width:88%;max-height:88%;image-rendering:pixelated}
+.pad{padding:12px}.label{font-weight:700}.sub{color:var(--muted);font-size:13px;margin-top:2px;word-break:break-all}
+.row{display:flex;gap:8px;margin-top:10px}.row .btn{flex:1;text-align:center}
+footer{opacity:.75;text-align:center;padding:28px}.hint{opacity:.85;font-size:13px}
+@media (max-width:720px){.wrap{grid-template-columns:1fr;gap:10px}.count{margin:0}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
+</head><body>
+<header><div class="wrap">
+  <div class="title">QR Labels & Sheets — Demo</div>
+  <input id="q" type="text" placeholder="Pretraga po Label, URL ili SSID…"/>
+  <button id="reload" class="btn">Reload</button>
+</div></header>
+<main>
+  <div class="toolbar">
+    <div class="chip" data-filter="ALL" data-active="true">All</div>
+    <div class="chip" data-filter="URL">URL</div>
+    <div class="chip" data-filter="WIFI">WIFI</div>
+    <div class="count" id="count"></div>
+  </div>
+  <div id="grid" class="grid"></div>
+  <div class="hint">Source: local CSV (qr_items.csv). Za drugi izvor može ?csv=… parametar.</div>
+</main>
+<footer>Made for Microns — static, no backend, easy handover.</footer>
+<script>
+const CONFIG={CSV_URL:"qr_items.csv"};const override=new URLSearchParams(location.search).get('csv');if(override)CONFIG.CSV_URL=override;
+let allRows=[],viewRows=[];const grid=document.getElementById('grid'),count=document.getElementById('count'),search=document.getElementById('q');
+async function loadCsv(){const res=await fetch(CONFIG.CSV_URL);const text=await res.text();const parsed=Papa.parse(text,{header:true,skipEmptyLines:true});
+allRows=parsed.data.map(r=>({Label:r.Label||r.label||r.Name||"",Type:r.Type||r.type||"",URL:r.URL||r.url||"",WiFi_SSID:r.WiFi_SSID||r.WIFI_SSID||r.ssid||"",
+WiFi_Security:r.WiFi_Security||r.security||"",WiFi_Password:r.WiFi_Password||r.password||"",PNG_URL:r.PNG_URL||r.png_url||"",SVG_URL:r.SVG_URL||r.svg_url||""}))
+.filter(r=>r.PNG_URL);viewRows=allRows.slice();render();makeSearch();}
+function makeSearch(){const fuse=new Fuse(allRows,{keys:["Label","URL","WiFi_SSID"],threshold:.35,ignoreLocation:true});
+search.oninput=e=>{const q=e.target.value.trim();const f=document.querySelector('.chip[data-active="true"]').dataset.filter;
+const base=q?fuse.search(q).map(x=>x.item):allRows.slice();viewRows=f==="ALL"?base:base.filter(r=>r.Type===f);render();};}
+function setFilter(t){document.querySelectorAll('.chip').forEach(c=>c.dataset.active=(c.dataset.filter===t));
+const q=search.value.trim();const base=q?new Fuse(allRows,{keys:["Label","URL","WiFi_SSID"],threshold:.35,ignoreLocation:true}).search(q).map(x=>x.item):allRows.slice();
+viewRows=t==="ALL"?base:base.filter(r=>r.Type===t);render();}
+document.querySelectorAll('.chip').forEach(c=>c.onclick=()=>setFilter(c.dataset.filter));document.getElementById('reload').onclick=loadCsv;
+function render(){grid.innerHTML="";count.textContent=`${viewRows.length} item(s)`;for(const r of viewRows){const card=document.createElement('div');card.className='card';
+const w=document.createElement('div');w.className='img';const img=new Image();img.loading='lazy';img.src=r.PNG_URL;w.appendChild(img);
+const body=document.createElement('div');body.className='pad';const label=document.createElement('div');label.className='label';label.textContent=r.Label||"(no label)";
+const sub=document.createElement('div');sub.className='sub';sub.textContent=(r.Type==="WIFI"?(r.WiFi_SSID||""):(r.URL||""));
+const row=document.createElement('div');row.className='row';const a1=document.createElement('a');a1.className='btn';a1.textContent='Download PNG';a1.href=r.PNG_URL;a1.target='_blank';a1.rel='noopener';
+row.appendChild(a1);if(r.SVG_URL){const a2=document.createElement('a');a2.className='btn';a2.textContent='Download SVG';a2.href=r.SVG_URL;a2.target='_blank';a2.rel='noopener';row.appendChild(a2);}
+body.append(label,sub,row);card.append(w,body);grid.append(card);}}
+loadCsv();
+</script></body></html>

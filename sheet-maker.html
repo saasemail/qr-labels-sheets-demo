@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Sheet Maker – QR Labels (A4)</title>
+<link rel="icon" href="data:,">
+<style>
+  :root{--bg:#0b1020;--panel:#0f1730;--line:#25356a;--text:#e8ecff;--muted:#a9b6e9;--accent:#8ab4ff;}
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#0b1020,#0e1734);color:var(--text);font:14px/1.5 system-ui,Segoe UI,Roboto,Arial}
+  header{position:sticky;top:0;z-index:2;background:#0b1020cc;backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .wrap{max-width:1100px;margin:0 auto;padding:12px 16px;display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center}
+  .title{font-weight:700}
+  .btn{background:#22376f;border:1px solid var(--line);color:var(--text);padding:9px 12px;border-radius:10px;cursor:pointer;text-decoration:none}
+  .panel{max-width:1100px;margin:16px auto;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field input,.field select,textarea{background:#0c1430;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 10px;min-width:120px}
+  textarea{min-height:100px;width:100%}
+  #status{opacity:.85;margin-left:auto}
+  main{max-width:1100px;margin:0 auto;padding:0 16px 40px}
+  .page{width:210mm;height:297mm;background:white;color:black;margin:0 auto 12px auto;border:1px solid #cfd7ee;position:relative;page-break-after:always}
+  .mm{position:absolute;inset:var(--mtop) var(--mright) var(--mbot) var(--mleft)}
+  .grid{display:grid;gap:var(--gap)}
+  .cell{display:flex;flex-direction:column;align-items:center;justify-content:center;border:1px dashed #e8e8e8;padding:4px}
+  .cell img,.cell canvas,.cell svg{width:100%;height:100%;object-fit:contain}
+  .label{font:12px/1.2 system-ui,Segoe UI,Roboto,Arial;text-align:center;margin-top:6px;word-break:break-word}
+  .hint{opacity:.8;margin-top:8px}
+  footer{opacity:.8;text-align:center;padding:18px}
+  @media print{ header,.panel,footer{display:none} body{background:white} .page{border:none;margin:0;page-break-after:always} }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="title">Sheet Maker – QR Labels (A4)</div>
+    <label class="btn" for="csvFile">Upload CSV</label>
+    <button id="pasteBtn" class="btn">Paste CSV</button>
+    <button id="printBtn" class="btn" disabled>Print to PDF</button>
+    <div id="status"></div>
+  </div>
+</header>
+
+<div class="panel">
+  <div class="row">
+    <div class="field">
+      <label>Layout</label>
+      <select id="layout">
+        <option value="3x4">3 × 4 (12)</option>
+        <option value="4x5">4 × 5 (20)</option>
+        <option value="5x7">5 × 7 (35)</option>
+      </select>
+    </div>
+    <div class="field"><label>Margin (mm)</label><input id="margin" type="number" value="10" min="0" step="1"/></div>
+    <div class="field"><label>Gap (mm)</label><input id="gap" type="number" value="5" min="0" step="1"/></div>
+    <div class="field"><label>Show label text</label>
+      <select id="showLabel"><option value="yes" selected>Yes</option><option value="no">No</option></select>
+    </div>
+    <div class="field"><label>QR render size (px)</label><input id="qrpx" type="number" value="256" min="64" step="32"/></div>
+  </div>
+  <div class="hint">CSV treba kolone <b>Label</b> i <b>QR_String</b> (ili <b>PNG_URL</b>). Učitaj CSV → <b>Print</b> → “Save as PDF”.</div>
+</div>
+
+<main id="pages"></main>
+<footer>Radi lokalno (bez servera). Ako želiš striktno offline generisanje iz QR_String, dodaj lokalnu kopiju <code>qrcode.min.js</code> — vidi napomenu u dnu koda.</footer>
+<input id="csvFile" type="file" accept=".csv" style="display:none"/>
+
+<script>
+/* Mini CSV parser (podržava navodnike) */
+function parseCSV(text){
+  const rows=[]; let i=0, cur=[], cell="", inQuotes=false;
+  while(i<text.length){
+    const ch=text[i];
+    if(inQuotes){ if(ch=='"'){ if(text[i+1]=='"'){cell+='"'; i++;} else inQuotes=false; }
+      else cell+=ch;
+    }else{
+      if(ch=='"') inQuotes=true;
+      else if(ch==','){ cur.push(cell); cell=""; }
+      else if(ch=='\n'){ cur.push(cell); rows.push(cur); cur=[]; cell=""; }
+      else if(ch=='\r'){ }
+      else cell+=ch;
+    }
+    i++;
+  }
+  cur.push(cell); rows.push(cur);
+  const header=rows.shift(); if(!header) return [];
+  return rows.filter(r=>r.length && r.join("").trim()!=="").map(r=>{
+    const o={}; header.forEach((h,idx)=>o[(h||"").trim()]= (r[idx]||"").trim()); return o;
+  });
+}
+/* px iz mm (za print CSS ~96dpi) */
+const MM = mm => mm * 96 / 25.4;
+const pagesEl = document.getElementById('pages');
+const statusEl = document.getElementById('status');
+const printBtn = document.getElementById('printBtn');
+
+function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n));return o;}
+
+function makeQR(container, text, size){
+  if(!text){ container.textContent="(empty)"; return; }
+  if (window.qrcode) {
+    const qr = qrcode(0,'M'); qr.addData(text); qr.make();
+    const svg = qr.createSvgTag({cellSize: Math.max(1, Math.floor(size/40)), margin:1});
+    container.innerHTML = svg;
+  } else {
+    // Fallback: prikaži text (ili možeš ovde pozvati PNG_URL API ako želiš online)
+    container.textContent = text;
+  }
+}
+
+function renderPages(rows){
+  pagesEl.innerHTML="";
+  const [cols,rowsPer]=document.getElementById('layout').value.split('x').map(Number);
+  const margin=+document.getElementById('margin').value||0;
+  const gap=+document.getElementById('gap').value||0;
+  const showLabel=document.getElementById('showLabel').value==='yes';
+  const qrpx=+document.getElementById('qrpx').value||256;
+
+  const perPage=cols*rowsPer;
+  const pages=chunk(rows, perPage);
+  pages.forEach(pageRows=>{
+    const page=document.createElement('div'); page.className='page';
+    const mm=document.createElement('div'); mm.className='mm';
+    mm.style.setProperty('--mtop',MM(margin)+'px');mm.style.setProperty('--mright',MM(margin)+'px');
+    mm.style.setProperty('--mbot',MM(margin)+'px');mm.style.setProperty('--mleft',MM(margin)+'px');
+    mm.style.setProperty('--gap',MM(gap)+'px');
+    const grid=document.createElement('div'); grid.className='grid';
+    grid.style.gridTemplateColumns=`repeat(${cols},1fr)`; grid.style.gridTemplateRows=`repeat(${rowsPer},1fr)`;
+
+    pageRows.forEach(r=>{
+      const cell=document.createElement('div'); cell.className='cell';
+      if(r.PNG_URL){
+        const img=new Image(); img.loading='lazy'; img.src=r.PNG_URL; cell.appendChild(img);
+      }else{
+        const holder=document.createElement('div'); holder.style.width='100%'; holder.style.height='100%';
+        cell.appendChild(holder); requestAnimationFrame(()=>makeQR(holder, r.QR_String||r.QR_string||"", qrpx));
+      }
+      if(showLabel){ const t=document.createElement('div'); t.className='label'; t.textContent=r.Label||""; cell.appendChild(t); }
+      grid.appendChild(cell);
+    });
+
+    mm.appendChild(grid); page.appendChild(mm); pagesEl.appendChild(page);
+  });
+  statusEl.textContent=`${rows.length} label(s), ${pages.length} page(s)`; printBtn.disabled = rows.length===0;
+}
+
+/* CSV input */
+document.getElementById('csvFile').addEventListener('change', e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader(); r.onload=()=>{const rows=parseCSV(r.result); renderPages(rows);};
+  r.readAsText(f);
+});
+document.getElementById('pasteBtn').onclick=async ()=>{
+  const txt = await navigator.clipboard.readText().catch(()=>prompt("Paste CSV here:","")||"");
+  if(!txt) return; const rows=parseCSV(txt); renderPages(rows);
+};
+document.getElementById('printBtn').onclick=()=>window.print();
+</script>
+
+<!-- QR biblioteka: prvo probaj lokalno (lib/qrcode.min.js), pa fallback na CDN -->
+<script>
+(function(){
+  var s=document.createElement('script');
+  s.src='lib/qrcode.min.js'; s.onload=()=>console.log('qrcode.min.js loaded (local)');
+  s.onerror=function(){
+    var c=document.createElement('script');
+    c.src='https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js';
+    c.onload=()=>console.log('qrcode.min.js loaded (cdn)');
+    document.body.appendChild(c);
+  };
+  document.body.appendChild(s);
+})();
+</script>
+</body>
+</html>
